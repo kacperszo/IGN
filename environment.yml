@@ -1,0 +1,14 @@
+name: base
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.6
+  - nomkl
+  - openblas
+  - rdkit
+  - numpy=1.17
+  - pandas=0.25
+  - scipy=1.3
+  - unzip
+  - pip
