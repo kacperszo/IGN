@@ -6,7 +6,13 @@ from dgllife.utils import BaseAtomFeaturizer, atom_type_one_hot, atom_degree_one
     atom_is_aromatic, ConcatFeaturizer, bond_type_one_hot, atom_hybridization_one_hot, \
     one_hot_encoding, atom_formal_charge, atom_num_radical_electrons, bond_is_conjugated, \
     bond_is_in_ring, bond_stereo_one_hot
-from dgl.data.chem import BaseBondFeaturizer
+# dgl 0.5 removed dgl.data.chem and the featurizers moved to dgllife. Importing either way
+# lets one source tree serve both the reference tier (dgl 0.4.3) and a modern one, which is
+# what makes `verify` a comparison of environments rather than of two diverging codebases.
+try:
+    from dgl.data.chem import BaseBondFeaturizer
+except ImportError:
+    from dgllife.utils import BaseBondFeaturizer
 from functools import partial
 from itertools import repeat
 from torchani import SpeciesConverter, AEVComputer
@@ -19,6 +25,14 @@ import os
 import pickle
 
 warnings.filterwarnings('ignore')
+
+# dgl 2.1 calls torch.compiler.is_compiling(), which arrived in a later torch than its own
+# torch-2.1 wheel index implies — one more sign of that project's packaging drifting. Outside
+# torch.compile the function always returns False, and nothing here compiles, so supplying it
+# is equivalent rather than a workaround. No effect on the reference tier, where dgl 0.4.3
+# never calls it.
+if hasattr(torch, 'compiler') and not hasattr(torch.compiler, 'is_compiling'):
+    torch.compiler.is_compiling = lambda: False
 converter = SpeciesConverter(['C', 'O', 'N', 'S', 'P', 'F', 'Cl', 'Br', 'I'])
 
 
@@ -28,6 +42,26 @@ def chirality(atom):  # the chirality information defined in the AttentiveFP
                [atom.HasProp('_ChiralityPossible')]
     except:
         return [False, False] + [atom.HasProp('_ChiralityPossible')]
+
+
+def _build_graph(src_lists, dst_lists, num_nodes):
+    """Build a DGL graph from accumulated edge lists, on either DGL generation.
+
+    dgl 0.4 built graphs by mutation (`DGLGraph()` then `add_edges`); 1.0 removed that and
+    only `dgl.graph((src, dst))` remains. Both are supported here so one source tree serves
+    the reference tier and the modern one, which is what lets `verify` compare environments
+    instead of two diverging codebases.
+    """
+    src = np.concatenate(src_lists).astype(np.int64) if src_lists else np.array([], dtype=np.int64)
+    dst = np.concatenate(dst_lists).astype(np.int64) if dst_lists else np.array([], dtype=np.int64)
+    try:
+        return dgl.graph((torch.from_numpy(src), torch.from_numpy(dst)), num_nodes=num_nodes)
+    except (AttributeError, TypeError):  # dgl 0.4: no dgl.graph with this signature
+        g = dgl.DGLGraph()
+        g.add_nodes(num_nodes)
+        if len(src):
+            g.add_edges(src, dst)
+        return g
 
 
 class MyAtomFeaturizer(BaseAtomFeaturizer):
@@ -121,16 +155,20 @@ def graphs_from_mol_ign(dir, key, label, graph_dic_path, dis_threshold=8.0, path
         dis_threshold = dis_threshold
 
         # construct graphs1
-        g = dgl.DGLGraph()
-        # add nodes
         num_atoms_m1 = mol1.GetNumAtoms()  # number of ligand atoms
         num_atoms_m2 = mol2.GetNumAtoms()  # number of pocket atoms
         num_atoms = num_atoms_m1 + num_atoms_m2
-        g.add_nodes(num_atoms)
 
+        # dgl 1.0 removed the mutable `DGLGraph() + add_edges` pattern this was written
+        # against, so edges are accumulated and the graph built once at the end. Edge ORDER
+        # is load-bearing — features are assigned positionally below — so they go in exactly
+        # as the original appended them: self loops, ligand bonds, pocket bonds. Getting that
+        # wrong misaligns every edge feature without raising anything.
+        _src, _dst = [], []
         if add_self_loop:
-            nodes = g.nodes()
-            g.add_edges(nodes, nodes)
+            nodes = np.arange(num_atoms)
+            _src.append(nodes)
+            _dst.append(nodes)
 
         # add edges, ligand molecule
         num_bonds1 = mol1.GetNumBonds()
@@ -144,7 +182,8 @@ def graphs_from_mol_ign(dir, key, label, graph_dic_path, dis_threshold=8.0, path
             dst1.append(v)
         src_ls1 = np.concatenate([src1, dst1])
         dst_ls1 = np.concatenate([dst1, src1])
-        g.add_edges(src_ls1, dst_ls1)
+        _src.append(src_ls1)
+        _dst.append(dst_ls1)
 
         # add edges, pocket
         num_bonds2 = mol2.GetNumBonds()
@@ -158,16 +197,17 @@ def graphs_from_mol_ign(dir, key, label, graph_dic_path, dis_threshold=8.0, path
             dst2.append(v + num_atoms_m1)
         src_ls2 = np.concatenate([src2, dst2])
         dst_ls2 = np.concatenate([dst2, src2])
-        g.add_edges(src_ls2, dst_ls2)
+        _src.append(src_ls2)
+        _dst.append(dst_ls2)
+
+        g = _build_graph(_src, _dst, num_atoms)
 
         # add interaction edges, only consider the euclidean distance within dis_threshold
-        g3 = dgl.DGLGraph()
-        g3.add_nodes(num_atoms)
         dis_matrix = distance_matrix(mol1.GetConformers()[0].GetPositions(), mol2.GetConformers()[0].GetPositions())
         node_idx = np.where(dis_matrix < dis_threshold)
         src_ls3 = np.concatenate([node_idx[0]])
         dst_ls3 = np.concatenate([node_idx[1] + num_atoms_m1])
-        g3.add_edges(src_ls3, dst_ls3)
+        g3 = _build_graph([src_ls3], [dst_ls3], num_atoms)
 
         # assign atom features
         # 'h', features of atoms
@@ -246,7 +286,11 @@ def graphs_from_mol_ign(dir, key, label, graph_dic_path, dis_threshold=8.0, path
             status = False
         else:
             status = True
-    except:
+    except Exception as _e:
+        # The original swallowed this silently, so a broken environment reported itself only
+        # as "the number of test data: 0" with no clue which complex or which error. Keep the
+        # behaviour — one bad complex should not stop a run — but say what happened.
+        print('graph construction failed for %s: %s: %s' % (key, type(_e).__name__, _e))
         g = None
         g3 = None
         status = False

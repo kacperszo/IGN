@@ -4,6 +4,12 @@ FROM docker.io/mambaorg/micromamba:latest
 COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yml /tmp/environment.yml
 RUN micromamba install -y -n base -f /tmp/environment.yml && micromamba clean --all --yes
 
+# Pillow, pulled in by matplotlib, links against libtiff.so.5. The base image has no libtiff
+# at all and current Debian ships .so.6, so it has to come from conda-forge at the version
+# that still provides .so.5. graph_constructor.py does `from pylab import *`, so matplotlib
+# is on the import path whether or not anything plots.
+RUN micromamba install -y -n base -c conda-forge "libtiff=4.2" && micromamba clean --all --yes
+
 # must appear before any RUN that invokes python
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
 
@@ -17,6 +23,10 @@ USER $MAMBA_USER
 RUN pip install --no-cache-dir \
     torch==1.3.1+cpu \
     -f https://download.pytorch.org/whl/torch_stable.html
+
+# DGL 0.4.3 asks which backend to use on first import, interactively. There is no stdin in
+# a build, so without this the import check dies on EOFError from input().
+ENV DGLBACKEND=pytorch
 
 # DGL CPU pinned before dgllife so dgllife cannot pull a newer version
 # (dgl.data.chem.BaseBondFeaturizer was removed in DGL 0.5)

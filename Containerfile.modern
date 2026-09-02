@@ -1,0 +1,72 @@
+# IGN, modern tier — the same source as the reference tier, on hardware that still exists.
+#
+# The reference tier pins torch 1.3.1, whose CUDA 10.1 builds stop at sm_75. Both our GPUs
+# are newer (sm_89 local, sm_86 cluster), so training needs this.
+#
+# The port is two lines, not a rewrite: `dgl.data.chem` moved to `dgllife` and `fn.copy_edge`
+# became `fn.copy_e`. Both are handled by fallbacks in the source, so ONE tree serves both
+# tiers and `verify` compares environments rather than diverging codebases. See PATCHES.md.
+FROM docker.io/library/python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg DGLBACKEND=pytorch
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# cu121 covers sm_86 and sm_89; the wheel ships a fat binary for both
+# torch 2.1.2, not something newer: DGL publishes CUDA wheels only for the torch versions
+# it explicitly supports, and its wheels link against one torch ABI. data.dgl.ai serves a
+# templated repo.html for paths that were never populated, so an unsupported combination
+# resolves to a wheel URL that answers 403 — S3's response for an object that is not there
+# when listing is denied. torch-2.1/cu121 is what their docs actually document.
+RUN pip install --no-cache-dir torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+
+# dgl must match the torch build it links against
+# The CUDA runtime libraries, explicitly. `--index-url` above confines pip to PyTorch's own
+# index, which does not carry the nvidia-* packages, and torch 2.1.2 runs without them while
+# DGL does not — it dlopens libcusparse.so.12 at import. Versions match the cu121 build.
+RUN pip install --no-cache-dir \
+    nvidia-cusparse-cu12==12.1.0.106 \
+    nvidia-cublas-cu12==12.1.3.1 \
+    nvidia-cudnn-cu12==8.9.2.26
+
+# torch puts these on the loader path itself in some versions and not others, so say it
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cusparse/lib:/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
+
+# dgl pinned: the torch-2.1 index serves 2.4.0 as its newest, but that build calls
+# torch.compiler.is_compiling(), which only exists from torch 2.3. The wheel is filed under a
+# torch version it does not actually support — of a piece with the project looking unmaintained.
+# 2.1.0 is the release that matches this torch.
+# torchdata pinned below 0.8: dgl.graphbolt imports torchdata.datapipes, which 0.8 removed
+# when datapipes were deprecated. 0.7.1 is the release that pairs with torch 2.1.
+RUN pip install --no-cache-dir "torchdata==0.7.1" \
+    && pip install --no-cache-dir pydantic psutil requests pyyaml \
+    && pip install --no-cache-dir "dgl==2.1.0" -f https://data.dgl.ai/wheels/torch-2.1/cu121/repo.html
+
+RUN pip install --no-cache-dir \
+    dgllife \
+    # torchani pinned to the reference tier's version: newer releases validate the species
+    # list and reject hydrogen, which the converter here is not configured for. That is a
+    # featurisation difference, not a cosmetic one, and verify against the golden file would
+    # be meaningless if the two tiers computed different atom features.
+    "torchani==2.2" \
+    rdkit \
+    biopython \
+    scikit-learn \
+    "numpy<2" \
+    pandas \
+    scipy \
+    prody \
+    prefetch-generator \
+    matplotlib \
+    tqdm
+
+# fail at build time rather than deep inside a training run
+RUN python -c "import torch, dgl, dgllife, torchani, rdkit, prody, matplotlib; \
+from dgl import function as fn; assert hasattr(fn, 'copy_e'); \
+from dgllife.utils import BaseBondFeaturizer; \
+print('env ok', torch.__version__, dgl.__version__)"
+
+WORKDIR /work
+COPY . /work
+RUN cd scripts && python -c "import model_v2, graph_constructor; print('ign imports ok')"

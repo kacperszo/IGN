@@ -1,1 +1,9 @@
-.git
+# Only the code belongs in the image; data and weights are bind-mounted at run time.
+.venv/
+.git/
+__pycache__/
+*.pyc
+envs/
+input_data/
+fig/
+*.tar.gz
