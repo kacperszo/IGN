@@ -187,9 +187,13 @@ if __name__ == '__main__':
         test_true, test_pred, te_keys, _ = run_a_eval_epoch(DTIModel, test_dataloader, device)
 
         # metrics
-        test_true = np.concatenate(np.array(test_true), 0).flatten()
-        test_pred = np.concatenate(np.array(test_pred), 0).flatten()
-        te_keys = np.concatenate(np.array(te_keys), 0).flatten()
+        # np.array() around a list of unequal-length batches builds a ragged array, which
+        # numpy tolerated until 1.24 and now refuses outright. The wrapper was redundant to
+        # begin with — np.concatenate takes a sequence of arrays — so dropping it is a no-op
+        # on the values and restores the behaviour the authors relied on.
+        test_true = np.concatenate(test_true, 0).flatten()
+        test_pred = np.concatenate(test_pred, 0).flatten()
+        te_keys = np.concatenate(te_keys, 0).flatten()
         total_pred = total_pred + test_pred
 
     pd_te = pd.DataFrame({'keys': te_keys, 'test_pred': total_pred/repetitions})

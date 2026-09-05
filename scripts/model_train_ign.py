@@ -346,11 +346,11 @@ if __name__ == '__main__':
             train_true, train_pred, _, _ = run_a_eval_epoch(DTIModel, train_dataloader, device)
             valid_true, valid_pred, _, _ = run_a_eval_epoch(DTIModel, valid_dataloader, device)
 
-            train_true = np.concatenate(np.array(train_true), 0)
-            train_pred = np.concatenate(np.array(train_pred), 0)
+            train_true = np.concatenate(train_true, 0)
+            train_pred = np.concatenate(train_pred, 0)
 
-            valid_true = np.concatenate(np.array(valid_true), 0)
-            valid_pred = np.concatenate(np.array(valid_pred), 0)
+            valid_true = np.concatenate(valid_true, 0)
+            valid_pred = np.concatenate(valid_pred, 0)
 
             train_rmse = np.sqrt(mean_squared_error(train_true, train_pred))
             valid_rmse = np.sqrt(mean_squared_error(valid_true, valid_pred))
@@ -382,25 +382,25 @@ if __name__ == '__main__':
         _4csj_true, _4csj_pred, _4csj_keys, _ = run_a_eval_epoch(DTIModel, _4csj_dataloader, device)
 
         # metrics
-        train_true = np.concatenate(np.array(train_true), 0).flatten()
-        train_pred = np.concatenate(np.array(train_pred), 0).flatten()
-        tr_keys = np.concatenate(np.array(tr_keys), 0).flatten()
+        train_true = np.concatenate(train_true, 0).flatten()
+        train_pred = np.concatenate(train_pred, 0).flatten()
+        tr_keys = np.concatenate(tr_keys, 0).flatten()
 
-        valid_true = np.concatenate(np.array(valid_true), 0).flatten()
-        valid_pred = np.concatenate(np.array(valid_pred), 0).flatten()
-        val_keys = np.concatenate(np.array(val_keys), 0).flatten()
+        valid_true = np.concatenate(valid_true, 0).flatten()
+        valid_pred = np.concatenate(valid_pred, 0).flatten()
+        val_keys = np.concatenate(val_keys, 0).flatten()
 
-        test_true = np.concatenate(np.array(test_true), 0).flatten()
-        test_pred = np.concatenate(np.array(test_pred), 0).flatten()
-        te_keys = np.concatenate(np.array(te_keys), 0).flatten()
+        test_true = np.concatenate(test_true, 0).flatten()
+        test_pred = np.concatenate(test_pred, 0).flatten()
+        te_keys = np.concatenate(te_keys, 0).flatten()
 
-        _4csj_true = np.concatenate(np.array(_4csj_true), 0).flatten()
-        _4csj_pred = np.concatenate(np.array(_4csj_pred), 0).flatten()
-        _4csj_keys = np.concatenate(np.array(_4csj_keys), 0).flatten()
+        _4csj_true = np.concatenate(_4csj_true, 0).flatten()
+        _4csj_pred = np.concatenate(_4csj_pred, 0).flatten()
+        _4csj_keys = np.concatenate(_4csj_keys, 0).flatten()
 
-        _5g5w_true = np.concatenate(np.array(_5g5w_true), 0).flatten()
-        _5g5w_pred = np.concatenate(np.array(_5g5w_pred), 0).flatten()
-        _5g5w_keys = np.concatenate(np.array(_5g5w_keys), 0).flatten()
+        _5g5w_true = np.concatenate(_5g5w_true, 0).flatten()
+        _5g5w_pred = np.concatenate(_5g5w_pred, 0).flatten()
+        _5g5w_keys = np.concatenate(_5g5w_keys, 0).flatten()
 
         pd_tr = pd.DataFrame({'keys': tr_keys, 'train_true': train_true, 'train_pred': train_pred})
         pd_va = pd.DataFrame({'keys': val_keys, 'valid_true': valid_true, 'valid_pred': valid_pred})
