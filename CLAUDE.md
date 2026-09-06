@@ -125,8 +125,12 @@ is wrong:
 | check | what it holds fixed | result |
 |---|---|---|
 | `compare_with_reference.py` | the graphs — replayed from the DGL model's own input | 279/279, max 2.4e-06 |
-| `compare_features.py` | the molecules — both featurisers, one rdkit | see below |
-| end to end vs `model_ign_prediction.py` | nothing | R=0.9995, mean 0.007 |
+| `export_port_graphs.py` + `predict.py --graphs` | rdkit — featurise in `ign-ref`, score on torch 2.5.1 | **279/279, R=1.000000, max 1.5e-05** |
+| `gnnb verify ign.torch` | nothing — the whole pipeline on a current stack | R=0.999272, 264/279 within 1e-4, max 0.591 |
+
+The middle row is the one that says the port is right: hold the chemistry toolkit fixed and
+the reproduction is exact, on every complex the reference tier scores. The last row is the
+price of a five-year newer rdkit, and it is charged to fifteen molecules.
 
 ### Four things had to be discovered, not read off the code
 
@@ -162,8 +166,8 @@ does:
 | MOL bond type 4 no longer flags **atoms** aromatic | `atom_is_aromatic` all zero on ligands |
 | `RemoveHs` moved a pyrrole N's H to `numExplicitHs`; manual deletion does not | one total-H column shifts |
 
-Measured on the full core set, the three cost R=-0.07, R=0.77 and R=0.978 respectively as
-they were fixed, ending at 0.9995. Note what that means: **a chemistry-toolkit upgrade is a
+Fixed one at a time, they took the agreement from R=-0.07 to 0.77 to 0.978 to 0.9993.
+Note what that means: **a chemistry-toolkit upgrade is a
 model change.** Neither `weights_only` nor a pinned torch protects against it, and none of it
 raises an error — every array keeps its shape.
 
@@ -175,10 +179,15 @@ all three. The graph constructor itself is exonerated: its rewrite from `DGLGrap
 
 ### What remains
 
-One complex in the core set, 1o0h, still disagrees: the two rdkits perceive a different
-formal charge, hybridisation and one different bond. That is a genuine difference in
-chemistry perception, not something the port can paper over, and it is the reason `verify`
-for `ign.torch` should carry a tolerance rather than demand equality.
+Fifteen complexes still disagree on a current rdkit, worst 4jia at 0.591 and 1o0h at 0.167
+where the two versions perceive a different formal charge, a different hybridisation and one
+different bond. That is chemistry perception, not something the port can paper over, so
+`ign.torch` declares `tolerance = 0.6` in the registry and everything else stays strict.
+
+If exactness matters more than a current toolkit — reproducing a published number rather than
+training — featurise through `export_port_graphs.py` in `ign-ref` and score the arrays with
+`predict.py --graphs`. That path is exact, and it is also how the port was shown to be right
+in the first place.
 
 ## Planned: a GPU tier for training
 
