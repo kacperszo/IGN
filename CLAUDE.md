@@ -50,9 +50,11 @@ Predictions come back as `keys,test_pred` and the adapter normalises them to
 - **There is no single checkpoint.** Five weight files are loaded from a path relative to the
   script and averaged, so they are baked into the image and the registry declares none.
 - **`weights_only` does not exist in torch 1.3.1**, three years before the parameter. What
-  compensates: all five checkpoints scan as *no code references at all* — structurally unable
-  to execute anything — plus the container isolation, which `tools/verify_isolation.py`
-  measures rather than assumes.
+  compensates: all five checkpoints scan clean — `collections.OrderedDict`, the two torch
+  storage classes and `torch._utils._rebuild_tensor_v2`, exactly what a plain state dict
+  holds — plus the container isolation, which `tools/verify_isolation.py` measures rather
+  than assumes. (This said *no code references at all* until `scan_pickle.py` was fixed to
+  read past the first of a pre-1.6 checkpoint's five pickle streams.)
 
 ## DGL looks abandoned, and that caps this model
 
