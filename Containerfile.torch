@@ -1,0 +1,55 @@
+# IGN on a current stack, with DGL removed rather than upgraded.
+#
+# The reference tier pins torch 1.3.1 + dgl 0.4.3 and is the only configuration that
+# reproduces the paper. Lifting it failed twice: dgl 2.1.0 scores R=-0.155 against the same
+# golden file, and dgl 2.4.0+cu124 — the only CUDA pairing data.dgl.ai actually serves — is
+# no better. So `ign_pyg/` reimplements the model and its featurisation without dgl at all,
+# and this image is what runs it.
+#
+# What that buys, beyond a torch that current GPUs support: the two DGL operations IGN needs
+# are twelve lines of torch in `ign_pyg/model.py`, so there is no compiled scatter extension
+# pinned to an exact torch ABI, no wheel index that answers 403 for combinations it never
+# built, and nothing to reinstall when torch moves. `torch_scatter` would have reproduced
+# the same trap in a different colour.
+#
+# Verified, not assumed:
+#   ign_pyg/compare_with_reference.py   the layers, against the DGL model's own outputs
+#   ign_pyg/compare_features.py         the featuriser, against the DGL graphs
+# Both run inside `ign-ref`, so they compare code and not environments.
+FROM docker.io/library/python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# cu124 covers sm_86 (cluster) and sm_89 (local). Nothing here constrains the torch version
+# the way dgl did — no other package links against its ABI — so this tracks the same build
+# the other modern images in this benchmark use rather than a version some wheel index picked.
+RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+
+# torchani pinned to the reference tier's version. Newer releases validate the species list
+# and reject hydrogen, which this converter is not configured for — that changes the atom
+# environment vectors, which are 54 of the 94 node features, so it is a featurisation
+# difference and not a cosmetic one.
+# numpy<2 for the same reason it is pinned elsewhere here: prody and torchani 2.2 predate it.
+RUN pip install --no-cache-dir \
+    "torchani==2.2" \
+    rdkit \
+    "numpy<2" \
+    scipy \
+    pandas \
+    prody
+
+# fail at build time rather than deep inside a run
+RUN python -c "import torch, torchani, rdkit, prody, scipy; \
+print('env ok', torch.__version__, torchani.__version__)"
+
+WORKDIR /work
+COPY . /work
+# import the port and confirm dgl really is absent, so a stray import cannot creep back in
+# and quietly reintroduce the dependency this image exists to drop
+RUN cd ign_pyg && python -c "import features, model, pocket, predict; import sys; \
+assert 'dgl' not in sys.modules, 'dgl was imported'; \
+import importlib.util as u; assert u.find_spec('dgl') is None, 'dgl is installed'; \
+print('ign port imports ok, no dgl')"

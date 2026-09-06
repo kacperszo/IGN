@@ -10,10 +10,14 @@ What comes out is the input the model actually sees, as plain arrays, plus what 
     g3  the interaction graph  edge features e and its edge list
     y   the model's prediction for the same input
 
-Dumping the graphs rather than rebuilding them in PyG is deliberate for this first check. It
-isolates the port's arithmetic from its featurisation: if the numbers disagree here, the cause
-is in the layers, not in how the graph was built. Porting `graph_constructor.py` off dgllife
-is a separate step with its own comparison.
+Dumping the graphs rather than rebuilding them is deliberate. It isolates the port's
+arithmetic from its featurisation: if the numbers disagree here, the cause is in the layers,
+not in how the graph was built.
+
+The ligand is staged through `pocket.read_ligand`, so both sides of any later comparison get
+the same molecule. Reading it any other way is not equivalent — `MolFromMolFile` on 1eby's
+original sdf keeps its hydrogens where `SDMolSupplier` drops them, and the graph goes from
+288 nodes to 382 with a prediction 4.4 log units adrift.
 
 usage (inside ign-ref):
     python export_reference.py --complexes /data --model /ckpt/... --out /outputs
@@ -29,17 +33,6 @@ import numpy as np
 import torch
 
 
-def _sdf_fails(d, cid):
-    """True when RDKit cannot read the sdf, so the mol2 beside it should be used instead."""
-    from rdkit import Chem
-
-    path = os.path.join(d, cid + "_ligand.sdf")
-    if not os.path.exists(path):
-        return {cid}
-    mols = [m for m in Chem.SDMolSupplier(path) if m is not None]
-    return set() if mols else {cid}
-
-
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--complexes", required=True)
@@ -50,9 +43,12 @@ def main() -> int:
     args = p.parse_args()
 
     sys.path.insert(0, args.scripts)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from rdkit import Chem  # noqa: E402
     from graph_constructor import GraphDatasetIGN, collate_fn_ign  # noqa: E402
     from utils import pocket_truncate  # noqa: E402
     from model_v2 import IGN  # noqa: E402
+    from pocket import PocketError, read_ligand  # noqa: E402
 
     ids = sorted(d for d in os.listdir(args.complexes)
                  if os.path.isdir(os.path.join(args.complexes, d)))[: args.limit]
@@ -71,23 +67,30 @@ def main() -> int:
         d = os.path.join(args.complexes, cid)
         # IGN's own naming, the same layout prepare_input.py stages
         protein = os.path.join(d, cid + ".pdb")
-        ligand = os.path.join(d, cid + ".sdf")
         if not os.path.exists(protein):
             protein = os.path.join(d, cid + "_protein.pdb")
-        if not os.path.exists(ligand):
-            ligand = os.path.join(d, cid + "_ligand.sdf")
-        # Some PDBbind sdf files do not sanitise — 1a30 and 1bzc among them — and the mol2
-        # beside them usually does. IGN's own prepare_input.py makes the same fallback.
-        if not os.path.exists(ligand) or cid in _sdf_fails(d, cid):
-            alt = os.path.join(d, cid + "_ligand.mol2")
-            if os.path.exists(alt):
-                ligand = alt
+
+        # The ligand goes through the port's reader, and both sides of the comparison then
+        # see the same molecule. That is the point: this file exists to test the graph
+        # builder, so the input to it must be held fixed. How the ligand is read is checked
+        # separately, end to end, against the numbers model_ign_prediction.py produces.
+        try:
+            mol = read_ligand(d, cid, work=work)
+        except PocketError as e:
+            print("  %s: %s" % (cid, e))
+            continue
+        ligand = os.path.join(work, cid + "_staged.sdf")
+        Chem.MolToMolFile(mol, ligand)
+
         out_pocket = os.path.join(work, "pockets", cid + "_pkt.pdb")
         out_complex = os.path.join(work, "complexes", cid)
         try:
             pocket_truncate(protein, ligand, out_pocket, out_complex)
         except Exception as e:
             print("  %s: pocket_truncate failed: %s: %s" % (cid, type(e).__name__, e))
+            continue
+        if not os.path.exists(out_complex):
+            print("  %s: pocket_truncate wrote nothing" % cid)
             continue
         staged.append(cid)
         dirs.append(out_complex)

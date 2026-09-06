@@ -112,6 +112,74 @@ The general lesson is worth more than this model: **pinning the framework is not
 chemistry toolkit that turns files into features is as much a part of the environment as torch,
 and it changes the inputs rather than the arithmetic.
 
+## The port: IGN without DGL, and what it took to make it agree
+
+`ign_pyg/` reimplements the model and its featurisation on plain torch — no dgl, no dgllife,
+no PyG, no `torch_scatter`. The two graph operations IGN needs are twelve lines of torch, so
+there is no compiled extension pinned to a torch ABI and nothing to reinstall when torch
+moves. `ign.torch` runs it.
+
+Two checks, deliberately separate, because a single end-to-end number cannot say which half
+is wrong:
+
+| check | what it holds fixed | result |
+|---|---|---|
+| `compare_with_reference.py` | the graphs — replayed from the DGL model's own input | 279/279, max 2.4e-06 |
+| `compare_features.py` | the molecules — both featurisers, one rdkit | see below |
+| end to end vs `model_ign_prediction.py` | nothing | R=0.9995, mean 0.007 |
+
+### Four things had to be discovered, not read off the code
+
+**`FC` builds three Linear layers when asked for two.** Two consecutive `if`s where an
+`if/elif` was meant, so `j == 0` takes both branches. Writing the obvious `elif` changes the
+architecture; `load_state_dict(strict=True)` is what caught it, which is the reason the port
+keeps upstream's parameter names rather than tidier ones.
+
+**The chirality features are constant zero, and always were.** `pocket_truncate` pickles
+`[ligand, pocket]` and the graph builder unpickles them; rdkit's pickler drops atom
+properties, so `_CIPCode` and `_ChiralityPossible` are gone by the time the featuriser looks
+for them. Three of the 40 atom features never take a value. Computing them properly in the
+port made it *disagree* with the checkpoints — restoring them is a retraining decision.
+
+**The ligand's reader decides the molecule.** Upstream's chain is `SDMolSupplier` →
+`MolToMolFile` → `MolFromMolFile`. Reading the original file with `MolFromMolFile` instead
+looks equivalent and is not: on 1eby it keeps 40 hydrogens the supplier drops, the complex
+goes from 288 nodes to 382, and the prediction moves 4.4 log units.
+
+**89 of 285 complexes were being dropped by a fallback that cannot work.** `pocket_truncate`
+calls `MolFromMolFile`, which reads sdf and mol only. Pointing it at a mol2 always fails, so
+the mol2 has to be rewritten as an sdf first — which is what `prepare_input.py` does.
+
+### rdkit is the environment, as much as torch is
+
+Three changes between rdkit 2021.03 and 2026.03 each broke reproduction on their own, and the
+port now handles all three explicitly rather than inheriting whatever the installed version
+does:
+
+| change | effect if ignored |
+|---|---|
+| hydrogens survive the sdf round trip | 88 atoms instead of 48; predictions go negative |
+| MOL bond type 4 no longer flags **atoms** aromatic | `atom_is_aromatic` all zero on ligands |
+| `RemoveHs` moved a pyrrole N's H to `numExplicitHs`; manual deletion does not | one total-H column shifts |
+
+Measured on the full core set, the three cost R=-0.07, R=0.77 and R=0.978 respectively as
+they were fixed, ending at 0.9995. Note what that means: **a chemistry-toolkit upgrade is a
+model change.** Neither `weights_only` nor a pinned torch protects against it, and none of it
+raises an error — every array keeps its shape.
+
+This is also the most likely explanation for `ign.modern`'s R=-0.155, which was blamed on DGL
+for months. That tier runs the same `graph_constructor.py` against a 2026 rdkit and would hit
+all three. The graph constructor itself is exonerated: its rewrite from `DGLGraph()` to
+`dgl.graph(...)` produces bit-identical graphs in edge-id order, tested directly with
+`ign_pyg/dump_edges.py`.
+
+### What remains
+
+One complex in the core set, 1o0h, still disagrees: the two rdkits perceive a different
+formal charge, hybridisation and one different bond. That is a genuine difference in
+chemistry perception, not something the port can paper over, and it is the reason `verify`
+for `ign.torch` should carry a tolerance rather than demand equality.
+
 ## Planned: a GPU tier for training
 
 Wanted, and a genuine port rather than a version bump. What it requires, in order:
