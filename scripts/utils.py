@@ -373,7 +373,59 @@ class FocalLoss(nn.Module):
             return F_loss
 
 
+def _strip_hydrogens(mol):
+    """Heavy atoms only, decided here rather than by whichever rdkit is installed.
+
+    rdkit 2021.03 dropped the hydrogens on the way through `MolFromMolFile`; 2026 keeps them,
+    and neither `RemoveHs` nor `RemoveAllHs` removes them. 1eby's ligand then has 88 atoms
+    instead of 48 and the complex graph 382 nodes instead of 288. A no-op on the reference
+    image, where there is nothing left to remove.
+
+    A hydrogen on an aromatic neighbour is kept as an explicit count, which is rdkit's own
+    rule: a pyrrole nitrogen's hydrogen cannot be inferred back from its valence, and losing
+    it moves one of the five total-H features.
+    """
+    hydrogens = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 1]
+    if not hydrogens:
+        return mol
+    editable = Chem.RWMol(mol)
+    for idx in sorted(hydrogens, reverse=True):
+        for neighbour in editable.GetAtomWithIdx(idx).GetNeighbors():
+            if any(b.GetBondType() == Chem.BondType.AROMATIC for b in neighbour.GetBonds()):
+                neighbour.SetNumExplicitHs(neighbour.GetNumExplicitHs() + 1)
+        editable.RemoveAtom(idx)
+    stripped = editable.GetMol()
+    try:
+        Chem.SanitizeMol(stripped)
+    except Exception:
+        Chem.SanitizeMol(stripped, Chem.SanitizeFlags.SANITIZE_ALL
+                         ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+    return stripped
+
+
+def _flag_aromatic_atoms(mol):
+    """Mark an atom aromatic when one of its bonds is, which is what rdkit 2021 did.
+
+    PDBbind ligand sdf files use MOL bond type 4. The older reader set `GetIsAromatic()` on
+    the atoms from it; the newer one leaves the flag on the bonds alone, and sanitisation
+    settles it neither way because the molecule cannot be kekulised. `atom_is_aromatic` is one
+    of the 40 atom features and the checkpoints were trained with it set.
+    """
+    for bond in mol.GetBonds():
+        if bond.GetBondType() == Chem.BondType.AROMATIC:
+            bond.GetBeginAtom().SetIsAromatic(True)
+            bond.GetEndAtom().SetIsAromatic(True)
+    return mol
+
+
 def pocket_truncate(protein_file, ligand_file, pocket_out_file, complex_out_file, distance=5, sanitize=True):
+    """Cut the pocket out of the protein and pickle it beside the ligand.
+
+    The three rdkit corrections below are why the modern tier reproduces at all. Between
+    2021.03 and 2026 rdkit stopped removing these hydrogens and stopped flagging atoms
+    aromatic from bond type 4, and each change alone is enough to destroy the reproduction
+    while every array keeps its shape. All three are no-ops on the reference image.
+    """
     ligand = Chem.MolFromMolFile(ligand_file, sanitize=sanitize)
     structure = parsePDB(protein_file)
     if ligand and structure:
@@ -384,6 +436,8 @@ def pocket_truncate(protein_file, ligand_file, pocket_out_file, complex_out_file
         pocket = Chem.MolFromPDBFile(pocket_out_file, sanitize=sanitize)  # not contain H
         if pocket:
             Chem.MolToPDBFile(pocket, pocket_out_file)  # not contain H
+            ligand = _flag_aromatic_atoms(_strip_hydrogens(ligand))
+            pocket = _strip_hydrogens(pocket)
             with open(complex_out_file, 'wb') as f:
                 pickle.dump([ligand, pocket], f)
         else:

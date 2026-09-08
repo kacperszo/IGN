@@ -171,9 +171,15 @@ Note what that means: **a chemistry-toolkit upgrade is a
 model change.** Neither `weights_only` nor a pinned torch protects against it, and none of it
 raises an error — every array keeps its shape.
 
-This is also the most likely explanation for `ign.modern`'s R=-0.155, which was blamed on DGL
-for months. That tier runs the same `graph_constructor.py` against a 2026 rdkit and would hit
-all three. The graph constructor itself is exonerated: its rewrite from `DGLGraph()` to
+**This was then confirmed on the DGL tier itself.** `ign.modern`'s R=-0.155 was blamed on DGL
+for months; it runs the same `graph_constructor.py` against a 2026 rdkit and hits all three
+changes. Moving the two corrections into `pocket_truncate` — strip the hydrogens, flag the
+aromatic atoms from bond type 4 — takes that tier from max|Δ| = 14.6 against the golden to
+**R = 0.991, max|Δ| = 0.53**, on the same residual class as the port. Both are no-ops on the
+reference image, so one source tree still serves all three tiers.
+
+Two independent codebases, the same three fixes, the same recovery: the diagnosis is tested,
+not inferred. The graph constructor itself is exonerated: its rewrite from `DGLGraph()` to
 `dgl.graph(...)` produces bit-identical graphs in edge-id order, tested directly with
 `ign_pyg/dump_edges.py`.
 
