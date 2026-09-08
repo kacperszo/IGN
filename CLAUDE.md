@@ -3,14 +3,22 @@
 ## What this is
 
 Affinity prediction from an interaction graph network, averaged over five checkpoints. The
-authors' code, from a Chinese lab, run unmodified inside a container — the most foreign code
-in the benchmark and the one the isolation exists for.
+authors' code is the most foreign in the benchmark and the one the container isolation exists
+for.
 
-Runs as `ign.reference`. CPU-only: the authors pinned torch 1.3.1, which predates our GPUs.
+Three tiers off one source tree. **Use `ign.torch`** unless you are reproducing a published
+number: it is the model reimplemented on plain PyTorch, with no DGL, dgllife, PyG or compiled
+scatter extension, so it runs on any current torch.
+
+| variant | stack | `gnnb verify` |
+|---|---|---|
+| `ign.reference` | torch 1.3.1, dgl 0.4.3, CPU only | 279/279, max abs diff 1e-06 |
+| `ign.modern` | torch 2.4.1+cu124, dgl 2.4.0 | 279/279, 0.598 (tolerance 0.75) |
+| `ign.torch` | torch 2.5.1+cu124, no DGL | 279/279, 0.591 (tolerance 0.75) |
 
 ## Current state
 
-Done for `predict` and `embed`, on both tiers.
+Done for `predict` and `embed` on all three tiers.
 
 | | |
 |---|---|
@@ -26,9 +34,6 @@ complexes sit inside PDBbind refined.
 The embedding is native because `IGN.forward` ends `self.FC(readouts)`: `readouts` is already a
 graph vector and `FC` is the head. Nothing had to be invented, and it retains more than any
 pooling we chose ourselves.
-
-Predictions come back as `keys,test_pred` and the adapter normalises them to
-`complex_id,y_pred`.
 
 ## Hard-won facts (do NOT regress these)
 
@@ -53,166 +58,87 @@ Predictions come back as `keys,test_pred` and the adapter normalises them to
   compensates: all five checkpoints scan clean — `collections.OrderedDict`, the two torch
   storage classes and `torch._utils._rebuild_tensor_v2`, exactly what a plain state dict
   holds — plus the container isolation, which `tools/verify_isolation.py` measures rather
-  than assumes. (This said *no code references at all* until `scan_pickle.py` was fixed to
-  read past the first of a pre-1.6 checkpoint's five pickle streams.)
+  than assumes. A clean scan means "only allowlisted references", never "the file is empty".
+- **`FC` builds three Linear layers when asked for two.** Two consecutive `if`s where an
+  `if/elif` was meant, so `j == 0` takes both branches. Writing the obvious `elif` changes the
+  architecture; `load_state_dict(strict=True)` is what catches it, which is why the port keeps
+  upstream's parameter names rather than tidier ones.
+- **The three chirality features are constant zero, and always were.** `pocket_truncate`
+  pickles `[ligand, pocket]` and the graph builder unpickles them; rdkit's pickler drops atom
+  properties, so `_CIPCode` and `_ChiralityPossible` are gone before the featuriser looks.
+  Computing them properly makes the model disagree with its own checkpoints. Restoring them is
+  a retraining decision, not a porting one.
+- **The ligand's reader decides the molecule.** The chain is `SDMolSupplier` → `MolToMolFile`
+  → `MolFromMolFile`. Reading the original file with `MolFromMolFile` instead is not
+  equivalent: on 1eby it keeps 40 hydrogens the supplier drops, the complex goes from 288
+  nodes to 382, and the prediction moves 4.4 log units.
+- **`MolFromMolFile` cannot open a mol2 at all**, so a mol2 has to be rewritten as an sdf
+  first. Pointing the reader at it looks like a fallback and never fires — that is how 89 of
+  285 core-set complexes were being dropped.
+- **Ask for `edges(order="eid")` before pairing edges with `edata`.** A CSR-backed DGL graph
+  returns edges grouped by destination otherwise, and comparing the two conventions invents a
+  misalignment that is not there.
 
-## DGL looks abandoned, and that caps this model
+## rdkit is part of the model, as much as torch is
 
-Kacper's observation, not verified here: DGL has had no commits for about a year. What we saw
-building the modern tier is consistent with it — CUDA wheels published only up to torch 2.1,
-and `data.dgl.ai` serving a templated `repo.html` for paths like `torch-2.4/cu121` that were
-never populated, so pip resolves a wheel URL that answers 403 (S3's reply for an object that
-is not there when listing is denied).
-
-Consequences worth carrying:
-
-- **This model is fine for now.** The container pins a working DGL, and a frozen library
-  inside an image is exactly what the image is for.
-- **But the torch ceiling is closed.** Anything on DGL stays at torch 2.1, which covers sm_86
-  and sm_89 today. The next GPU generation puts IGN back in the position torch 1.3.1 put it
-  in, a few years later.
-- **It is a selection criterion for the remaining roster.** If any of the uncloned repos build
-  on DGL, that is worth knowing before investing in them.
-
-The contrast is instructive: EquiBind is in this benchmark as a PyG rewrite Kacper did rather
-than a DGL fork, so it runs on any current torch. That looked like tidying at the time; it
-turns out to have been an exit from a dead end.
-
-## The GPU tier works, but does not verify bit-for-bit
-
-`ign.modern` (torch 2.1.2+cu121, dgl 2.1.0) runs and reaches the GPU: torch reports sm_89 and
-DGL graphs move to `cuda:0`. Training is unblocked.
-
-Six incompatibilities had to be closed, all handled by fallbacks so **one source tree serves
-both tiers** — which is what makes `verify` a comparison of environments rather than of two
-diverging codebases:
-
-| what | reference (dgl 0.4.3) | modern (dgl 2.1.0) |
-|---|---|---|
-| featurizer import | `dgl.data.chem` | `dgllife.utils` |
-| edge copy | `fn.copy_edge` | `fn.copy_e` |
-| edge multiply | `fn.src_mul_edge` | `fn.u_mul_e` |
-| graph construction | `DGLGraph()` + `add_edges` | `dgl.graph((src, dst))` |
-| `torch.compiler.is_compiling` | not called | called; shimmed to `False` |
-| torchani | 2.2 | **pinned to 2.2** — newer releases reject hydrogen |
-
-**But the two tiers are not bit-comparable, and the reason is RDKit, not DGL.** The reference
-image carries rdkit 2021.03.4 (conda) and the modern one 2026.03.5 (pip) — five years of
-molecule-parsing changes:
-
-- `1a30`: 7.0858803 vs 7.0858793 — identical to float32 noise, so the port itself is right
-- `1bcu`: 4.8139734 vs 2.6389904 — a real difference
-- `1bzc`: unreadable under the old RDKit, parsed fine by the new one
-
-So `verify` cannot be strict here until rdkit is pinned to a matching version in the modern
-tier, which may not be installable on Python 3.11. Until then the modern tier is **usable for
-training but not a bit-exact reproduction**, and that has to travel with any number from it.
-
-The general lesson is worth more than this model: **pinning the framework is not enough.** The
-chemistry toolkit that turns files into features is as much a part of the environment as torch,
-and it changes the inputs rather than the arithmetic.
-
-## The port: IGN without DGL, and what it took to make it agree
-
-`ign_pyg/` reimplements the model and its featurisation on plain torch — no dgl, no dgllife,
-no PyG, no `torch_scatter`. The two graph operations IGN needs are twelve lines of torch, so
-there is no compiled extension pinned to a torch ABI and nothing to reinstall when torch
-moves. `ign.torch` runs it.
-
-Two checks, deliberately separate, because a single end-to-end number cannot say which half
-is wrong:
-
-| check | what it holds fixed | result |
-|---|---|---|
-| `compare_with_reference.py` | the graphs — replayed from the DGL model's own input | 279/279, max 2.4e-06 |
-| `export_port_graphs.py` + `predict.py --graphs` | rdkit — featurise in `ign-ref`, score on torch 2.5.1 | **279/279, R=1.000000, max 1.5e-05** |
-| `gnnb verify ign.torch` | nothing — the whole pipeline on a current stack | R=0.999272, 264/279 within 1e-4, max 0.591 |
-
-The middle row is the one that says the port is right: hold the chemistry toolkit fixed and
-the reproduction is exact, on every complex the reference tier scores. The last row is the
-price of a five-year newer rdkit, and it is charged to fifteen molecules.
-
-### Four things had to be discovered, not read off the code
-
-**`FC` builds three Linear layers when asked for two.** Two consecutive `if`s where an
-`if/elif` was meant, so `j == 0` takes both branches. Writing the obvious `elif` changes the
-architecture; `load_state_dict(strict=True)` is what caught it, which is the reason the port
-keeps upstream's parameter names rather than tidier ones.
-
-**The chirality features are constant zero, and always were.** `pocket_truncate` pickles
-`[ligand, pocket]` and the graph builder unpickles them; rdkit's pickler drops atom
-properties, so `_CIPCode` and `_ChiralityPossible` are gone by the time the featuriser looks
-for them. Three of the 40 atom features never take a value. Computing them properly in the
-port made it *disagree* with the checkpoints — restoring them is a retraining decision.
-
-**The ligand's reader decides the molecule.** Upstream's chain is `SDMolSupplier` →
-`MolToMolFile` → `MolFromMolFile`. Reading the original file with `MolFromMolFile` instead
-looks equivalent and is not: on 1eby it keeps 40 hydrogens the supplier drops, the complex
-goes from 288 nodes to 382, and the prediction moves 4.4 log units.
-
-**89 of 285 complexes were being dropped by a fallback that cannot work.** `pocket_truncate`
-calls `MolFromMolFile`, which reads sdf and mol only. Pointing it at a mol2 always fails, so
-the mol2 has to be rewritten as an sdf first — which is what `prepare_input.py` does.
-
-### rdkit is the environment, as much as torch is
-
-Three changes between rdkit 2021.03 and 2026.03 each broke reproduction on their own, and the
-port now handles all three explicitly rather than inheriting whatever the installed version
-does:
+Three changes between rdkit 2021.03 and 2026.03 each destroy the reproduction on their own,
+and none of them raises anything — every array keeps its shape:
 
 | change | effect if ignored |
 |---|---|
-| hydrogens survive the sdf round trip | 88 atoms instead of 48; predictions go negative |
+| hydrogens survive the sdf round trip | 288 nodes become 382; predictions go negative |
 | MOL bond type 4 no longer flags **atoms** aromatic | `atom_is_aromatic` all zero on ligands |
-| `RemoveHs` moved a pyrrole N's H to `numExplicitHs`; manual deletion does not | one total-H column shifts |
+| `RemoveHs` moved a pyrrole N's H to `numExplicitHs` | one total-H feature column shifts |
 
-Fixed one at a time, they took the agreement from R=-0.07 to 0.77 to 0.978 to 0.9993.
-Note what that means: **a chemistry-toolkit upgrade is a
-model change.** Neither `weights_only` nor a pinned torch protects against it, and none of it
-raises an error — every array keeps its shape.
+Fixed one at a time, the port went R = -0.07 → 0.77 → 0.978 → 0.9993. The same two corrections
+in `pocket_truncate` took `ign.modern` from max abs diff 14.6 to 0.598 — **two independent
+codebases, the same three fixes, the same recovery.** That is what cleared DGL, which had been
+blamed for the regression for months; the `DGLGraph()` → `dgl.graph()` rewrite produces
+bit-identical graphs in edge-id order, tested with `ign_pyg/dump_edges.py`.
 
-**This was then confirmed on the DGL tier itself.** `ign.modern`'s R=-0.155 was blamed on DGL
-for months; it runs the same `graph_constructor.py` against a 2026 rdkit and hits all three
-changes. Moving the two corrections into `pocket_truncate` — strip the hydrogens, flag the
-aromatic atoms from bond type 4 — takes that tier from max|Δ| = 14.6 against the golden to
-**R = 0.991, max|Δ| = 0.53**, on the same residual class as the port. Both are no-ops on the
-reference image, so one source tree still serves all three tiers.
+**Handle the behaviour in code rather than pinning a version**, so the model stops depending
+on which rdkit happens to be installed. `ign_pyg/pocket.py` does exactly that.
 
-Two independent codebases, the same three fixes, the same recovery: the diagnosis is tested,
-not inferred. The graph constructor itself is exonerated: its rewrite from `DGLGraph()` to
-`dgl.graph(...)` produces bit-identical graphs in edge-id order, tested directly with
-`ign_pyg/dump_edges.py`.
+DGL is still a dead end for this model — no commits in about a year, CUDA wheels published
+only up to torch 2.1, and `data.dgl.ai` serving a templated `repo.html` for paths that were
+never populated. That is why `ign.torch` exists and why it is the tier to build on.
 
-### What remains
+## The port
 
-Fifteen complexes still disagree on a current rdkit, worst 4jia at 0.591 and 1o0h at 0.167
-where the two versions perceive a different formal charge, a different hybridisation and one
-different bond. That is chemistry perception, not something the port can paper over, so
-`ign.torch` declares `tolerance = 0.6` in the registry and everything else stays strict.
+`ign_pyg/` reimplements the model and its featurisation. Parameter names match
+`scripts/model_v2.py`, so the published checkpoints load with `strict=True` and a divergence
+can only be arithmetic. The two graph operations DGL provided are twelve lines of torch, so
+there is no extension wheel to match against a torch version.
 
-If exactness matters more than a current toolkit — reproducing a published number rather than
-training — featurise through `export_port_graphs.py` in `ign-ref` and score the arrays with
-`predict.py --graphs`. That path is exact, and it is also how the port was shown to be right
-in the first place.
+Checked in three places, deliberately separate, because one end-to-end number cannot say which
+half is wrong:
 
-## Planned: a GPU tier for training
+| check | what it holds fixed | result |
+|---|---|---|
+| `ign_pyg/compare_with_reference.py` | the graphs, replayed from the DGL model's own input | 279/279, max 2.4e-06 |
+| `export_port_graphs.py` + `predict.py --graphs` | rdkit — featurise in `ign-ref`, score on torch 2.5.1 | **279/279, R = 1.000000** |
+| `gnnb verify ign.torch` | nothing | R = 0.999272, 264/279 within 1e-4 |
 
-Wanted, and a genuine port rather than a version bump. What it requires, in order:
+The middle row is the one that says the port is right. The last is the price of a five-year
+newer rdkit, charged to fifteen molecules — 4jia worst at 0.591, and 1o0h where the two
+versions perceive a different formal charge and one different bond. For an exact reproduction,
+use the middle path.
 
-1. **torch ≥1.8** for sm_86, realistically 2.x.
-2. **dgl ≥0.6**, which is past the 0.5 break that removed `dgl.data.chem`. Every
-   `BaseBondFeaturizer` import moves to `dgllife`, and `fn.copy_edge` is gone in dgl 1.0.
-3. **torchani** and **ProDy** rebuilt against the new stack; the pinned 2.2 and 2.0 are from
-   the same era as torch 1.3.
-4. A `verify` run against this tier's golden file, because none of the above is behaviourally
-   neutral.
-
-Do this as a second variant (`ign.modern`) beside the reference tier, never in place of it.
-The reference tier is what proves the port did not change the model.
+`ign_pyg/test_invariance.py` checks the prediction does not move under rotation, translation or
+a relabelling of the ligand's atoms — every geometric feature here is a distance, an angle, an
+area or an AEV, so it must not.
 
 ## Build & run
 
 ```bash
-podman build --format=docker -t ign-ref:latest .
-gnnb run --variant ign.reference --capability predict --dataset <complexes>
+podman build --format=docker -f Containerfile.torch -t ign-torch:latest .   # the one to use
+podman build --format=docker -t ign-ref:latest .                            # reference tier
+podman build --format=docker -f Containerfile.modern -t ign:latest .        # dgl on cuda
+
+gnnb verify --variant ign.torch --dataset data/CASF-2016/coreset
+gnnb run --variant ign.torch --capability predict --dataset <complexes> --gpu
+gnnb run --variant ign.torch --capability embed   --dataset <complexes>
 ```
+
+Never rebuild a working image under a tag something depends on: build to a candidate tag, run
+`verify`, then retag.
