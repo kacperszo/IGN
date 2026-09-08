@@ -1,3 +1,41 @@
+<!-- gnn-benchmark:begin -->
+# Running this in gnn-benchmark
+
+Three tiers off one source tree. **Use `ign.torch`** unless you are reproducing a published
+number: it is the model reimplemented on plain PyTorch — no DGL, no dgllife, no PyG, no
+compiled scatter extension — so it runs on any current torch.
+
+| variant | stack | `gnnb verify` on CASF-2016 |
+|---|---|---|
+| `ign.reference` | torch 1.3.1, dgl 0.4.3 | 279/279, max abs diff 1e-06 |
+| `ign.modern` | torch 2.4.1+cu124, dgl 2.4.0 | 279/279, 0.598 (tolerance 0.75) |
+| `ign.torch` | torch 2.5.1+cu124, **no DGL** | 279/279, 0.591 (tolerance 0.75) |
+
+The tolerance is not slack: 264 of 279 complexes reproduce to float noise, and the rest differ
+because rdkit 2026 perceives those molecules differently from the 2021 build the checkpoints
+were trained against. Hold rdkit fixed and the port is exact — featurise with
+`ign_pyg/export_port_graphs.py` inside `ign-ref` and score the arrays with
+`ign_pyg/predict.py --graphs`, which gives R = 1.000000, max abs diff 1.5e-05 on all 279.
+
+```bash
+podman build --format=docker -f Containerfile.torch -t ign-torch:latest .
+
+gnnb verify --variant ign.torch --dataset data/CASF-2016/coreset
+gnnb run --variant ign.torch --capability predict --dataset <complexes> --gpu
+gnnb run --variant ign.torch --capability embed   --dataset <complexes>
+```
+
+The encoder stops at the pooled graph vector and `FC` is the head — the authors' own boundary,
+so nothing is invented. `ign_pyg/test_invariance.py` checks that the prediction does not move
+under rotation, translation or a relabelling of the ligand's atoms.
+
+Everything hard-won — why the chirality features are constant zero, which rdkit changes break
+what, why `FC` builds three Linear layers when asked for two — is in [CLAUDE.md](CLAUDE.md).
+
+<!-- gnn-benchmark:end -->
+
+---
+
 # InteractionGraphNet(IGN)
 a Novel and Efficient Deep Graph Representation Learning Framework for Accurate Protein-Ligand Interaction Predictions.
 Accurate quantification of protein-ligand interactions remains a key challenge to structure-based drug design. However, 
