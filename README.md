@@ -90,6 +90,30 @@ podman run --rm \
     -v /path/to/outputs:/outputs:rw,U \
     localhost/ign-torch:latest \
     sh -c 'set -e; cd /work/ign_pyg && python predict.py --complexes /data --checkpoints /work/model_save --embeddings /outputs/embeddings.npz --work /outputs/work'
+
+# train
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v /path/to/splits:/splits:ro \
+    -v /path/to/cache:/cache:rw,U \
+    --shm-size 4g \
+    localhost/ign-torch:latest \
+    sh -c 'cd /work/ign_pyg && if [ -f /cache/ign_train_r5.npz ]; then echo reusing /cache/ign_train_r5.npz; else python prepare_graphs.py --complexes /data --labels /splits/train.csv --out /cache/ign_train_r5.npz --distance 5 --work /tmp/ign_prepare; fi && if [ -f /cache/ign_val_r5.npz ]; then echo reusing /cache/ign_val_r5.npz; else python prepare_graphs.py --complexes /data --labels /splits/val.csv --out /cache/ign_val_r5.npz --distance 5 --work /tmp/ign_prepare; fi && python train_contract.py --train-graphs /cache/ign_train_r5.npz --out /outputs --seed 0 --val-graphs /cache/ign_val_r5.npz --epochs 30 --device cpu'
+
+# finetune  (encoder frozen; drop --freeze-encoder to tune all of it)
+podman run --rm \
+    --network=none --read-only \
+    --tmpfs /tmp:rw,size=2g \
+    -v /path/to/complexes:/data:ro \
+    -v /path/to/outputs:/outputs:rw,U \
+    -v /path/to/splits:/splits:ro \
+    -v /path/to/cache:/cache:rw,U \
+    --shm-size 4g \
+    localhost/ign-torch:latest \
+    sh -c 'cd /work/ign_pyg && if [ -f /cache/ign_train_r5.npz ]; then echo reusing /cache/ign_train_r5.npz; else python prepare_graphs.py --complexes /data --labels /splits/train.csv --out /cache/ign_train_r5.npz --distance 5 --work /tmp/ign_prepare; fi && if [ -f /cache/ign_val_r5.npz ]; then echo reusing /cache/ign_val_r5.npz; else python prepare_graphs.py --complexes /data --labels /splits/val.csv --out /cache/ign_val_r5.npz --distance 5 --work /tmp/ign_prepare; fi && python train_contract.py --train-graphs /cache/ign_train_r5.npz --out /outputs --seed 0 --val-graphs /cache/ign_val_r5.npz --epochs 30 --init-encoder /ckpt/encoder.pt --freeze-encoder --device cpu'
 ```
 
 ## What comes out
