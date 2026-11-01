@@ -38,8 +38,17 @@ MODEL_ARGS = dict(node_feat_size=54 + 40, edge_feat_size=21, num_layers=3, graph
 
 
 def load_models(checkpoint_dir: Path) -> list[IGN]:
-    """Every .pth in the directory, in sorted order so a run is reproducible."""
-    paths = sorted(checkpoint_dir.glob("*.pth"))
+    """Every .pth in the directory, in sorted order so a run is reproducible — or, given a
+    single file, just that one.
+
+    The single-file form is what lets a model this harness trained be scored at all:
+    `train_contract.py` writes one `model.pt`, and until 2026-09-29 the only thing this script
+    could load was the directory of the authors' five `.pth` checkpoints, averaged.
+    """
+    if checkpoint_dir.is_file():
+        paths = [checkpoint_dir]
+    else:
+        paths = sorted(checkpoint_dir.glob("*.pth"))
     if not paths:
         raise SystemExit(f"no .pth checkpoints in {checkpoint_dir}")
     models = []
@@ -84,7 +93,7 @@ def main() -> int:
                              "without touching rdkit — the way to tell a featurisation "
                              "difference apart from a modelling one")
     p.add_argument("--checkpoints", required=True, type=Path,
-                   help="directory of .pth files; all are averaged")
+                   help="directory of .pth files, all averaged — or a single checkpoint file")
     p.add_argument("--out", type=Path, help="where to write predictions.csv")
     p.add_argument("--embeddings", type=Path, help="where to write embeddings.npz")
     p.add_argument("--work", type=Path, default=Path("/tmp/ign_work"),

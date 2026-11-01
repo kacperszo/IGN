@@ -19,6 +19,7 @@ import argparse
 import csv
 import os
 import sys
+from multiprocessing import Pool
 
 import numpy as np
 
@@ -42,6 +43,29 @@ def read_labels(path: str) -> dict[str, float]:
     return {r["complex_id"]: float(r["y_true"]) for r in rows}
 
 
+def one_thread() -> None:
+    """Worker initialiser: one intra-op thread each, so N workers use N cores."""
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
+
+
+def featurise(task):
+    """(complex id, graph, None) or (complex id, None, reason)."""
+    complexes, cid, work, distance = task
+    d = os.path.join(complexes, cid)
+    try:
+        ligand, pkt = truncate(os.path.join(d, cid + "_protein.pdb"), read_ligand(d, cid),
+                               os.path.join(work, cid + "_pocket.pdb"), distance=distance)
+        return cid, build_graph(ligand, pkt), None
+    except PocketError as e:
+        return cid, None, str(e)
+    except Exception as e:  # noqa: BLE001 — one bad complex must not end the run
+        return cid, None, f"{type(e).__name__}: {e}"
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Featurise one split into an npz of graphs")
     p.add_argument("--complexes", required=True)
@@ -50,6 +74,7 @@ def main() -> int:
     p.add_argument("--work", default="/tmp/ign_prepare",
                    help="scratch for the pocket pdb files rdkit has to read back")
     p.add_argument("--distance", type=float, default=DISTANCE)
+    p.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
     args = p.parse_args()
 
     labels = read_labels(args.labels)
@@ -63,24 +88,19 @@ def main() -> int:
 
     arrays: dict[str, np.ndarray] = {}
     ids, ys, skipped = [], [], []
-    for cid in present:
-        d = os.path.join(args.complexes, cid)
-        try:
-            ligand, pkt = truncate(os.path.join(d, cid + "_protein.pdb"),
-                                   read_ligand(d, cid),
-                                   os.path.join(args.work, cid + "_pocket.pdb"),
-                                   distance=args.distance)
-            graph = build_graph(ligand, pkt)
-        except PocketError as e:
-            skipped.append((cid, str(e)))
-            continue
-        except Exception as e:  # noqa: BLE001 — one bad complex must not end the run
-            skipped.append((cid, f"{type(e).__name__}: {e}"))
+    tasks = [(args.complexes, cid, args.work, args.distance) for cid in present]
+    # imap keeps the input order, so the npz is the same whatever the number of workers
+    pool = Pool(args.workers, initializer=one_thread) if args.workers > 1 else None
+    for cid, graph, why in (pool.imap(featurise, tasks, chunksize=4) if pool else map(featurise, tasks)):
+        if graph is None:
+            skipped.append((cid, why))
             continue
         for name in PARTS:
             arrays[f"{cid}/{name}"] = graph[name]
         ids.append(cid)
         ys.append(labels[cid])
+    if pool:
+        pool.close()
 
     print(f"featurised {len(ids)} of {len(present)}")
     for cid, why in skipped[:10]:
