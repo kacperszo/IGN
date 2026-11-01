@@ -26,20 +26,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 # cu124 covers sm_86 (cluster) and sm_89 (local). Nothing here constrains the torch version
 # the way dgl did — no other package links against its ABI — so this tracks the same build
 # the other modern images in this benchmark use rather than a version some wheel index picked.
-RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+# Blackwell (sm_120, the lab server's RTX PRO 6000) needs a cu128 build, which still carries
+# sm_75-sm_90 and so runs on every card here; build it as localhost/ign-torch:cu128 with
+#   --build-arg TORCH=2.7.1 --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu128
+ARG TORCH=2.5.1
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir torch==${TORCH} --index-url ${TORCH_INDEX}
 
 # torchani pinned to the reference tier's version. Newer releases validate the species list
 # and reject hydrogen, which this converter is not configured for — that changes the atom
 # environment vectors, which are 54 of the 94 node features, so it is a featurisation
 # difference and not a cosmetic one.
 # numpy<2 for the same reason it is pinned elsewhere here: prody and torchani 2.2 predate it.
+# The rest pinned to what ign-torch:candidate resolved, so a rebuild changes torch and nothing
+# else: rdkit was unpinned, and a newer rdkit perceives some molecules differently, which is a
+# featurisation change that no error reports.
 RUN pip install --no-cache-dir \
     "torchani==2.2" \
-    rdkit \
-    "numpy<2" \
-    scipy \
-    pandas \
-    prody
+    "rdkit==2026.3.6" \
+    "numpy==1.26.4" \
+    "scipy==1.17.1" \
+    "pandas==3.0.5" \
+    "prody==2.6.1"
 
 # fail at build time rather than deep inside a run
 RUN python -c "import torch, torchani, rdkit, prody, scipy; \
