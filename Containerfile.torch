@@ -16,7 +16,13 @@
 #   ign_pyg/compare_with_reference.py   the layers, against the DGL model's own outputs
 #   ign_pyg/compare_features.py         the featuriser, against the DGL graphs
 # Both run inside `ign-ref`, so they compare code and not environments.
-FROM docker.io/library/python:3.11-slim
+# Pinned by digest, not by tag. `python:3.11-slim` is rebuilt upstream every few weeks, so a
+# tag makes which Python and which system libraries this starts from depend on the date
+# somebody rebuilt. This is the digest `ign-torch:cu128` was built from on 2026-11-01 — it was
+# still the cached base on 2026-11-04, which is how it could be recovered. A rebuild is still
+# not bit-identical, because pip resolves transitive dependencies afresh; the goldens remain
+# the test of whether a rebuilt image is the same model.
+FROM docker.io/library/python@sha256:d1053354624536b044162aaab1e418bd000ea35184fb1ae098ab3166b1072e72
 
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg
 
