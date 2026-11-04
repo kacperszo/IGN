@@ -157,6 +157,9 @@ def main() -> int:
     p.add_argument("--init-encoder", default=None,
                    help="encoder .pt from `gnnb encoder split`; makes this a fine-tune")
     p.add_argument("--freeze-encoder", action="store_true")
+    p.add_argument("--init-whole", action="store_true",
+                   help="--init-encoder is a whole model.pt from an earlier run, head included: "
+                        "the second stage of LP-FT, after a --freeze-encoder run trained the head")
     p.add_argument("--device", default="cuda:0")
     args = p.parse_args()
 
@@ -181,10 +184,25 @@ def main() -> int:
 
     model = IGN(**MODEL_ARGS).to(device)
     provenance: dict[str, object] = {}
-    if args.init_encoder:
+    if args.init_whole:
+        # LP-FT (Kumar et al., 2022): start the full fine-tune from a head already fitted to the
+        # pretrained features, so the first updates do not distort them through a random head.
+        # transfer_encoder refuses head tensors on purpose, so a whole model loads here, strictly.
+        if not args.init_encoder or args.freeze_encoder:
+            raise SystemExit("--init-whole needs --init-encoder (the model.pt) and no --freeze-encoder")
+        state = torch.load(args.init_encoder, map_location="cpu", weights_only=True)
+        model.load_state_dict(state, strict=True)
+        provenance = {"init_whole": args.init_encoder, "transferred_tensors": len(state)}
+        print(f"initialised the whole model, head included, from {args.init_encoder}")
+    elif args.init_encoder:
         provenance = transfer_encoder(model, args.init_encoder, freeze=args.freeze_encoder)
 
     loss_fn = nn.MSELoss()
+    if args.init_whole and val_store is not None:
+        # the loaded model must score what its own run selected it on, or the load went wrong
+        val_loss, val_r = evaluate(model, val_store, batch_size, device, loss_fn)
+        print(f"before training: val {val_loss:.4f} R {val_r:.4f}")
+        provenance.update(initial_val_loss=val_loss, initial_val_r=val_r)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
                                  lr=lr, weight_decay=AUTHOR_L2)
 
