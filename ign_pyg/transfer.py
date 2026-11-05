@@ -1,6 +1,6 @@
 """Move a trained encoder into a fresh IGN, and freeze it if asked.
 
-**IGN's boundary is the cleanest in the roster, and it is the authors' own.** `IGN.encode`
+**IGN's encoder/head boundary is the authors' own.** `IGN.encode`
 runs the covalent AttentiveFP, then the interaction graph, then a weighted edge readout, and
 returns a genuine complex-level vector:
 
@@ -9,8 +9,7 @@ returns a genuine complex-level vector:
     h_g_sum, w  = self.readout(bond_feats3, edge_batch, num_graphs)   # 200-d per complex
 
 `forward` is that followed by `self.FC(h_g_sum)`. So `FC` is the head and everything else is
-the encoder — no pooling had to be invented, unlike SS-GNN, PLANET and EquiBind where the head
-runs per edge and no complex vector exists at all. `models/ign/test_encoder_transfer.py` already
+the encoder — no pooling had to be invented. `test_encoder_transfer.py` already
 holds the boundary to a round trip.
 """
 
@@ -19,7 +18,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-#: The affinity head. Must agree with `encoder.head` for ign.torch in harness/registry.toml.
+#: The affinity head. Whatever cuts the encoder out of a checkpoint must use the same prefix.
 HEAD_PREFIXES = ("FC",)
 
 
@@ -32,7 +31,7 @@ def read_encoder(path: str) -> dict[str, torch.Tensor]:
     """Load an encoder file, accepting the shapes it arrives in.
 
     IGN's own checkpoints wrap the weights as `{"model_state_dict": ...}`, so that spelling is
-    accepted alongside the harness's `{"encoder": ...}`. `weights_only=True` throughout.
+    accepted alongside `{"encoder": ...}`. `weights_only=True` throughout.
     """
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if isinstance(payload, dict) and isinstance(payload.get("encoder"), dict):
@@ -53,7 +52,7 @@ def transfer_encoder(model: nn.Module, path: str, freeze: bool = False) -> dict[
     if head_keys:
         raise SystemExit(
             f"{path} carries {len(head_keys)} head tensors ({head_keys[:3]}). That is a whole "
-            f"checkpoint, not an encoder — cut it with `gnnb encoder split` first."
+            f"checkpoint, not an encoder — pass a file holding encoder tensors only."
         )
     unknown = [k for k in encoder if k not in target]
     if unknown:
@@ -96,7 +95,7 @@ def set_training_mode(model: nn.Module, training: bool, frozen_encoder: bool) ->
     Not a formality here: dropout runs at 0.25 through the AttentiveFP layers and the
     interaction convolution, and both batch-norm layers keep updating their running statistics
     in train mode whatever `requires_grad` says. A head fitted against a representation that is
-    re-sampled every step is a different experiment from the one `gnnb probe` measures.
+    re-sampled every step is a different experiment from the one a probe on a fixed representation measures.
     """
     if not training or not frozen_encoder:
         model.train(training)

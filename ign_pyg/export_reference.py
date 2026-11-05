@@ -2,7 +2,7 @@
 
 Runs inside the `ign-ref` image — the only configuration of IGN that reproduces its published
 behaviour (torch 1.3.1, dgl 0.4.3, R=0.802 over 279 core-set complexes). The `modern` tier is
-not usable as a reference: `gnnb verify` puts it at R=-0.155 against the same golden file.
+not usable as a reference: it scores R=-0.155 against the same reference predictions.
 
 What comes out is the input the model actually sees, as plain arrays, plus what it returned:
 

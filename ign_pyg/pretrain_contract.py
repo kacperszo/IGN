@@ -2,22 +2,20 @@
 
 The encoder is IGN's own, unchanged: `IGN.encode()` up to the pooled 200-d vector. The task head
 is new and exists only here — `pretrain_head`, an MLP from that vector to the K descriptors — so
-nothing of the affinity head `FC` is trained or kept. What this produces for the rest of the
-programme is `encoder.pt`: encoder tensors only, in the `{"encoder": ...}` form
+nothing of the affinity head `FC` is trained or kept. What this produces is `encoder.pt`: encoder tensors only, in the `{"encoder": ...}` form
 `transfer.read_encoder` accepts, loadable strictly into a fresh IGN by
-`gnnb train --init-encoder`.
+`train_contract.py --init-encoder`.
 
 Targets are z-scored with statistics fitted on the training pairs only, and the loss is MSE over
 the targets that are present — a NaN (a pocket with no residue in range, say) is masked out, not
 zeroed, since a zero after z-scoring is a claim about the value.
 
-**Two targets, `--target absolute|delta`.** `absolute` is Kuba's formulation: the descriptors of
-frame n+gap. An early run on 137 complexes showed that at a 1 ns gap those are ~90% the current
-frame's own descriptors — copying frame n scores a loss of 0.12 where predicting the mean scores
-1.29 — so the absolute task is mostly *describing the structure in view*. `delta` asks for the
-change, descriptors(n+gap) - descriptors(n): no structure-description shortcut exists there, and
-whatever the encoder learns has to be about where the complex is going. Running both separates
-"knows structure" from "knows motion".
+**Two targets, `--target absolute|delta`.** `absolute` predicts the descriptors of frame n+gap.
+At a 1 ns gap those are close to the current frame's own descriptors, so the absolute task is
+largely *describing the structure in view* — the persistence baseline below measures how much.
+`delta` asks for the change, descriptors(n+gap) - descriptors(n): no structure-description
+shortcut exists there, and whatever the encoder learns has to be about where the complex is
+going. Running both separates "knows structure" from "knows motion".
 
 Two numbers make the curve readable:
   * **persistence**: the validation loss of assuming nothing changes — copying frame n's
@@ -26,8 +24,8 @@ Two numbers make the curve readable:
   * **mean**: the loss of predicting the training mean, which is 1.0 by construction of the
     z-scoring and is there to calibrate the eye.
 
-Outputs follow `harness/training.py` — `model.pt`, `history.csv`, `summary.json` — plus
-`encoder.pt`. Resumable with `--state` and `--max-minutes`, as SIGN's trainer is.
+Outputs are `model.pt`, `history.csv`, `summary.json` — plus
+`encoder.pt`. Resumable with `--state` and `--max-minutes`.
 
 usage:
     python pretrain_contract.py --train /cache/ign_md_train --val /cache/ign_md_val \
@@ -205,7 +203,7 @@ def main() -> int:
     ap.add_argument("--init-encoder", default=None,
                     help="start the encoder from these weights instead of at random — published "
                          "weights, so that MD pretraining is a second stage on top of what the "
-                         "model already knows; loaded strictly, as `gnnb train --init-encoder` does")
+                         "model already knows; loaded strictly, as `train_contract.py --init-encoder` does")
     ap.add_argument("--head", choices=["plain", "ign"], default="plain",
                     help="pretraining head; `ign` mirrors the authors' FC (see attach_head)")
     ap.add_argument("--in-memory", action="store_true",

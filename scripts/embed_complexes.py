@@ -6,7 +6,7 @@ IGN is the first model here with a clean split: `IGN.forward` ends with
     return self.FC(readouts), weights
 
 so `readouts` is a genuine graph-level vector and `self.FC` is the head. Nothing has to be
-pooled by us — this embedding is **native**, unlike SS-GNN's and PLANET's.
+pooled by us — this embedding is **native**: no pooling had to be invented.
 
 Reads a directory of staged complexes (`<id>/<id>.pdb` + `<id>/<id>.sdf`, what
 prepare_input.py builds) rather than the zip, so IGN's mode detection is bypassed entirely.

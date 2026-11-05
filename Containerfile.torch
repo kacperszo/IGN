@@ -29,10 +29,10 @@ ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# cu124 covers sm_86 (cluster) and sm_89 (local). Nothing here constrains the torch version
-# the way dgl did — no other package links against its ABI — so this tracks the same build
-# the other modern images in this benchmark use rather than a version some wheel index picked.
-# Blackwell (sm_120, the lab server's RTX PRO 6000) needs a cu128 build, which still carries
+# cu124 covers sm_86 and sm_89. Nothing here constrains the torch version
+# the way dgl did — no other package links against its ABI — so this takes a current build
+# rather than a version some wheel index picked.
+# Blackwell (sm_120) needs a cu128 build, which still carries
 # sm_75-sm_90 and so runs on every card here; build it as localhost/ign-torch:cu128 with
 #   --build-arg TORCH=2.7.1 --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu128
 ARG TORCH=2.5.1

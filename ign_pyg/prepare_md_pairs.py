@@ -1,17 +1,15 @@
 """Build IGN pretraining pairs from MD frames: the graph of frame n, the descriptors of frame n+gap.
 
-The pretext task — ported from Kuba's MD_pretraining (`pretraining/dataset.py:build_frame_dataset`)
-to IGN — is to predict, from one MD frame alone, structural descriptors of the frame `gap` steps
-later in the same trajectory. At AI3's 10 frames per ns the default gap of 10 is 1 ns.
+The pretext task is to predict, from one MD frame alone, structural descriptors of the frame
+`gap` steps later in the same trajectory. At 10 frames per ns the default gap of 10 is 1 ns.
 
-Inputs are files, not another repository's code:
-  * `--frames`: PDBbind-layout frame directories `<pdb>_run_<r>_frame_<NNN>/`, as written by
-    MD_pretraining's `sources/ai3/process_archives.py`;
-  * `--descriptors`: that script's merged `descriptors.csv`, keyed (file=<pdb>_run_<r>, frame);
+Inputs are files, so any MD source can supply them:
+  * `--frames`: PDBbind-layout frame directories `<pdb>_run_<r>_frame_<NNN>/`;
+  * `--descriptors`: a `descriptors.csv` keyed (file=<pdb>_run_<r>, frame);
   * `--ids`: CSV with a `complex_id` column naming the complexes of this split.
 
-A pair is kept only when both frames pass Kuba's own filter — `ligand_rmsd_first < 8` A, i.e. the
-ligand has not left the pocket — as `modify_md_descrs_df` requires of both frames of a pair. The
+A pair is kept only when both frames satisfy `ligand_rmsd_first < 8` A — the ligand has not left
+the pocket — which has to hold of both frames of a pair, not just the first. The
 graph is IGN's own, built by the same `pocket.truncate` + `features.build_graph` that scoring
 uses, so pretraining and fine-tuning see graphs of one kind — after one correction: the frames
 come from AMBER and name residues by protonation state (HIE, HID, HIP, CYX, ASH, GLH, LYN), and
@@ -62,7 +60,7 @@ TARGETS = (
     "ligand_Asphericity", "ligand_SpherocityIndex", "ligand_PBF",
     "pocket_RadiusOfGyration",
 )
-#: Kuba's escape filter: frames where the ligand drifted this far from its start are dropped
+#: escape filter: frames where the ligand drifted this far from its start are dropped
 RMSD_CUTOFF = 8.0
 PARTS = ("h", "e", "edge_index", "e3", "edge_index3")
 #: AMBER protonation-state residue names -> the standard name RDKit has a bond-order template for

@@ -1,11 +1,11 @@
 # IGN, modern tier — the same source as the reference tier, on hardware that still exists.
 #
-# The reference tier pins torch 1.3.1, whose CUDA 10.1 builds stop at sm_75. Both our GPUs
-# are newer (sm_89 local, sm_86 cluster), so training needs this.
+# The reference tier pins torch 1.3.1, whose CUDA 10.1 builds stop at sm_75. Current
+# GPUs (sm_86, sm_89) are newer, so training on them needs this.
 #
 # The port is two lines, not a rewrite: `dgl.data.chem` moved to `dgllife` and `fn.copy_edge`
 # became `fn.copy_e`. Both are handled by fallbacks in the source, so ONE tree serves both
-# tiers and `verify` compares environments rather than diverging codebases. See PATCHES.md.
+# tiers and `verify` compares environments rather than diverging codebases. The fallbacks are commented where they occur.
 FROM docker.io/library/python:3.11-slim
 
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg DGLBACKEND=pytorch

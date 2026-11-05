@@ -2,7 +2,7 @@
 
 `embed` showed the representation can be read out. Pretraining needs the reverse: take an
 encoder trained on one task, put it in a fresh model, attach a head of a different shape, and
-train that. If this does not work the whole programme is limited to whatever the authors' head
+train that. If this does not work transfer learning is limited to whatever the authors' head
 already predicts.
 
 Four things have to hold, and each is a way it could fail quietly:

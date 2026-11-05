@@ -278,7 +278,7 @@ class EdgeWeightAndSum_V2(nn.Module):
 class IGN(nn.Module):
     """Covalent AttentiveFP, then an interaction graph, then a weighted edge readout.
 
-    `encode` stops at the pooled representation, which is what the benchmark freezes; `FC` is
+    `encode` stops at the pooled representation, which is what gets frozen when transferring; `FC` is
     the affinity head. That boundary is the authors' own — the readout produces a genuine
     complex-level vector, unlike the models here whose head runs per edge.
     """

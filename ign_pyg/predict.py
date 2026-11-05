@@ -41,7 +41,7 @@ def load_models(checkpoint_dir: Path) -> list[IGN]:
     """Every .pth in the directory, in sorted order so a run is reproducible — or, given a
     single file, just that one.
 
-    The single-file form is what lets a model this harness trained be scored at all:
+    The single-file form is what lets a model `train_contract.py` trained be scored at all:
     `train_contract.py` writes one `model.pt`, and until 2026-09-29 the only thing this script
     could load was the directory of the authors' five `.pth` checkpoints, averaged.
     """
