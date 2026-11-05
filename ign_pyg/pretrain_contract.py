@@ -44,6 +44,7 @@ import os
 import random
 import sys
 import time
+import zlib
 
 import numpy as np
 import torch
@@ -66,6 +67,58 @@ def shards_of(prefix: str) -> list[str]:
     return paths
 
 
+#: when set, every shard's targets are permuted across examples with this seed (--shuffle-targets)
+SHUFFLE_SEED: int | None = None
+
+
+def derange_across_complexes(ids: list[str], seed: int) -> np.ndarray:
+    """A permutation that never leaves an example with a target from its own complex.
+
+    A plain permutation would, because a shard holds many frames of the same trajectory and
+    those sit next to each other: with ~30 frames per complex in 500, about one example in
+    sixteen would keep a target its own graph genuinely predicts. That is a leak straight
+    into the control the control exists to rule out, so the few fixed points are repaired
+    rather than tolerated.
+
+    Done by rotation over complex-grouped positions rather than by swapping clashes out of a
+    random permutation. Swapping looks simpler and is wrong: numpy fancy-index assignment with
+    repeated partner indices drops values, so the result stops being a permutation at all —
+    measured on a 60-example toy, 4 clashes remained and the array was no longer a bijection.
+
+    Randomness is kept by shuffling the order of complexes, and of examples within each
+    complex, before the rotation.
+    """
+    rng = np.random.default_rng(seed)
+    complexes = np.array([i.split("_run_")[0] for i in ids])
+    n = len(ids)
+
+    groups = {}
+    for i, c in enumerate(complexes):
+        groups.setdefault(c, []).append(i)
+    names = list(groups)
+    rng.shuffle(names)
+    order = []
+    for c in names:
+        g = groups[c]
+        rng.shuffle(g)
+        order.extend(g)
+    order = np.asarray(order)
+
+    # a group occupies at most `shift` consecutive positions, so i and i+shift are never in
+    # the same one; the wrap only meets a different group because the groups were shuffled
+    shift = max(len(g) for g in groups.values())
+    if n < 2 * shift:
+        # one complex dominates the shard and no clean derangement exists; say so rather
+        # than return something that quietly leaks
+        print(f"  [warn] shuffle: largest complex holds {shift} of {n} examples, "
+              f"some targets will stay within their own complex", flush=True)
+        shift = max(1, n // 2)
+
+    perm = np.empty(n, dtype=int)
+    perm[order] = order[(np.arange(n) + shift) % n]
+    return perm
+
+
 class Shard:
     """One npz shard held in memory: graphs, targets and current-frame descriptors."""
 
@@ -75,6 +128,19 @@ class Shard:
             self.targets = z["targets"].astype(np.float32)
             self.current = z["current"].astype(np.float32)
             self.graphs = [{p: z[f"{i}/{p}"] for p in PARTS} for i in range(len(self.ids))]
+        if SHUFFLE_SEED is not None:
+            # `targets` and `current` move together, so the persistence baseline stays the
+            # honest comparison for whatever target this example now carries. Only the link
+            # between the GRAPH and the MD measurement is destroyed, which is the one thing
+            # this control is about: same graphs, same optimiser, same number of steps, same
+            # target distribution, no information about the input.
+            # crc32 of the shard name, not hash(): Python randomises string hashes per
+            # process, so hash() here would make the control unreproducible between runs
+            # while looking perfectly deterministic in the code.
+            per_shard = zlib.crc32(os.path.basename(path).encode()) % 10_000
+            perm = derange_across_complexes(self.ids, SHUFFLE_SEED + per_shard)
+            self.targets = self.targets[perm]
+            self.current = self.current[perm]
 
 
 #: shards held for the whole run when --in-memory is given; empty otherwise
@@ -212,12 +278,27 @@ def main() -> int:
                     help="read every shard once and keep it (~1 GB RAM per 7k pairs); by default each "
                          "epoch re-reads them, which leaves the GPU idle most of the time. Same "
                          "batches, same order, same numbers either way")
+    ap.add_argument("--shuffle-targets", action="store_true",
+                    help="CONTROL ARM: permute targets across examples, so the graph predicts "
+                         "a different complex's MD measurement. Same graphs, same optimiser, "
+                         "same step count, same target distribution, zero information about "
+                         "the input. If this transfers as well as the real thing, the gain was "
+                         "never about MD content -- and nothing in this programme has ruled "
+                         "that out. Targets move with their own `current`, so the persistence "
+                         "baseline stays interpretable; the normaliser is unaffected because a "
+                         "permutation leaves the marginal distribution alone.")
     ap.add_argument("--target", choices=["absolute", "delta"], default="absolute",
                     help="descriptors of frame n+gap, or their change from frame n — see above")
     ap.add_argument("--mix", type=int, default=1,
                     help="training shards pooled and shuffled together (see run_epoch); 1 = the "
                          "behaviour before 2026-10-20. ~1 GB RAM per 7k pairs held")
     args = ap.parse_args()
+
+    if args.shuffle_targets:
+        global SHUFFLE_SEED
+        SHUFFLE_SEED = args.seed
+        print("CONTROL ARM: targets permuted across examples; this encoder has seen no "
+              "association between a graph and its own MD measurement", flush=True)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -290,6 +371,9 @@ def main() -> int:
 
     torch.save({"encoder": best_encoder, "source": "ign_pyg/pretrain_contract.py",
                 "targets": targets, "target_mode": args.target, "gap": meta["gap"],
+                # travels with the weights, because a control encoder that cannot say it is
+                # one would be indistinguishable from a real arm six weeks from now
+                "shuffled_targets": bool(args.shuffle_targets),
                 "best_epoch": best_epoch},
                os.path.join(args.out, "encoder.pt"))
     with open(os.path.join(args.out, "history.csv"), "w", newline="") as f:
@@ -299,7 +383,7 @@ def main() -> int:
     last = history[-1]
     summary = {
         "model": "ign", "capability": "pretrain", "task": "MD next-frame descriptors",
-        "target_mode": args.target,
+        "target_mode": args.target, "shuffled_targets": bool(args.shuffle_targets),
         "targets": targets, "gap_frames": meta["gap"], "pairs_train": meta["pairs"],
         "epochs": len(history), "epochs_requested": args.epochs,
         "complete": len(history) >= args.epochs,
