@@ -1,0 +1,18 @@
+# ign-torch:cu128 with one file replaced, for the shuffled-target control arm.
+#
+#   docker build --format=docker -f Containerfile.shuf -t ign-torch:cu128-shuf .
+#
+# Why an image rather than a mount: the base image bakes the model repo with `COPY . /work`
+# and the harness does not mount over it, so a flag added to the working tree is invisible to
+# `gnnb train` — which is how three control runs failed on 2026-11-05 with "unrecognized
+# arguments: --shuffle-targets" while the file on disk plainly had it.
+#
+# Why a new tag rather than rebuilding cu128: `verify` passes against cu128 and things depend
+# on it. This is the same pattern as cu128-lpft (one file, derived tag, built offline), with the
+# difference that this Containerfile is committed. The lpft image was built ad hoc and cannot be
+# reproduced from a clone, which is the failure CLAUDE.md records twice already.
+#
+# Nothing but `pretrain_contract.py` differs, so `predict`, `embed` and `train` run byte-identical
+# code to cu128 and the control's encoder is comparable to the real arm's.
+FROM localhost/ign-torch:cu128
+COPY ign_pyg/pretrain_contract.py /work/ign_pyg/pretrain_contract.py
