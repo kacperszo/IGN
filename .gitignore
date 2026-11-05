@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+
+# local assistant settings: hold absolute paths from the machine they were written on
+.claude/

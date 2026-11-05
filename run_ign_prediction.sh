@@ -2,8 +2,7 @@
 # Run IGN binding-affinity prediction on a prepared input directory.
 #
 # The directory must contain exactly one .zip laid out for mode2 (one subdirectory
-# per target, each with its own .pdb and .sdf) — see
-# MD_pretraining/evaluate/frames_to_ign.py, which builds it.
+# per target, each with its own .pdb and .sdf).
 #
 # IGN writes prediction.csv back into that same directory, and deletes everything
 # there that is not a .csv or .zip, so give it a directory of its own.
@@ -14,7 +13,7 @@
 # NOTE: the image pins torch 1.3.1, which predates `weights_only`. Loading the five
 # checkpoints in model_save/ is therefore an unrestricted unpickle of third-party
 # files. Scan them first:
-#   uv run -m tools.scan_pickle model_save/    (from the MD_pretraining repo)
+# inspect each one with a pickle scanner before the first load.
 
 set -euo pipefail
 
