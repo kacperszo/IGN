@@ -228,6 +228,13 @@ def run_epoch(model, paths, mean, std, batch_size, device, rng, optimizer=None, 
             rng.shuffle(idx)
         for start in range(0, len(idx), batch_size):
             b = idx[start:start + batch_size]
+            if training and len(b) == 1:
+                # BatchNorm cannot normalise one example, and every group of `mix` shards ends in
+                # a partial batch, so a group whose size is 1 mod batch_size kills the run partway
+                # through. Eleven groups an epoch over twenty epochs is roughly two hundred draws
+                # at that, which is how `misato_nopep` seed 1 died at epoch 10 on 2026-11-06 while
+                # seeds 0 and 2 finished. Dropping at most one pair per group costs nothing.
+                continue
             *inputs, _ = collate([shards[s].graphs[i] for s, i in b], np.zeros(len(b), np.float32), device)
             targets = np.stack([shards[s].targets[i] for s, i in b])
             currents = np.stack([shards[s].current[i] for s, i in b])
