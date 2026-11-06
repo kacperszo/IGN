@@ -75,6 +75,13 @@ pooling we chose ourselves.
 - **`MolFromMolFile` cannot open a mol2 at all**, so a mol2 has to be rewritten as an sdf
   first. Pointing the reader at it looks like a fallback and never fires — that is how 89 of
   285 core-set complexes were being dropped.
+- **The MD pretrainer can produce a training batch of size 1, and BatchNorm then kills the run
+  partway through.** `run_epoch` pools `mix` shards and batches that pool, so *every* group ends
+  in a partial batch — eleven groups an epoch, twenty epochs, roughly two hundred draws at a
+  1-in-`batch_size` event. It is not a rare edge case, it is a slow fuse: `misato_nopep` seeds 0
+  and 2 finished while seed 1 died at epoch 10 on 2026-11-06, same data, same flags. The guard
+  skips a training batch of one and costs at most one pair per group. **A failure that depends on
+  the seed looks like bad luck and is usually an unguarded remainder.**
 - **Ask for `edges(order="eid")` before pairing edges with `edata`.** A CSR-backed DGL graph
   returns edges grouped by destination otherwise, and comparing the two conventions invents a
   misalignment that is not there.
