@@ -1,0 +1,24 @@
+# ign-torch:cu128 with the current pretrain_contract.py, which guards the batch-of-one fuse.
+#
+#   docker build --format=docker -f Containerfile.pc2 -t ign-torch:cu128-pc2 .
+#
+# Why this image exists: `run_epoch` batches each group of `mix` shards separately, so every
+# group ends in a partial batch and a group whose size is 1 mod batch_size kills the run in
+# BatchNorm. On the `misato_nopep` split it fired on two of four seeds — 1 and 3 died at
+# epoch 10 and 13, 0 and 2 finished — so retrying seeds is a coin flip at 45 minutes a toss.
+#
+# Why a new tag rather than rebuilding cu128: `verify` passes against cu128 and things depend on
+# it. Same precedent as cu128-lpft and cu128-shuf, and like cu128-shuf this Containerfile is
+# committed so the image can be rebuilt from a clone.
+#
+# Why cross-image comparison inside one arm is sound here: the guard skips a batch only in the
+# case that otherwise raises. A run that never meets a 1-example batch takes the same optimiser
+# steps on the same data in the same order and produces the same encoder, because the shuffle
+# has already happened when the guard is tested. So `misato_nopep` seeds 0 and 2, which
+# completed on cu128, would have completed identically here — and the alternative for seed 3 is
+# no third draw at all.
+#
+# Nothing but `pretrain_contract.py` differs from cu128, so `predict`, `embed` and `train` run
+# byte-identical code.
+FROM localhost/ign-torch:cu128
+COPY ign_pyg/pretrain_contract.py /work/ign_pyg/pretrain_contract.py
