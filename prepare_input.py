@@ -8,7 +8,7 @@ IGN's input protocol is unusual and unforgiving (`scripts/model_ign_prediction.p
   * only directories may sit at that top level — a stray `.pdb` or `.sdf` there silently
     switches it to mode1, which assumes one rigid protein and many ligand poses
   * files are `<id>/<id>.pdb` and `<id>/<id>.sdf`, not the `_protein`/`_ligand` names the
-    rest of the benchmark uses
+    other entry points here use
 
 Output keys come back as `<pdb stem>_<sdf _Name>`, so the ligand is written with `_Name`
 set to a known tag and the suffix is stripped when collecting.

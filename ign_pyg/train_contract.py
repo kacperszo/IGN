@@ -1,4 +1,4 @@
-"""Train the IGN port to the harness training contract.
+"""Train the IGN port with an explicit split, resumable from a transferred encoder.
 
 `scripts/model_train_ign.py` is the authors' trainer and it cannot be driven from here: its
 paths are absolute to the authors' cluster (`/apdcephfs/private_dejunjiang/...`), its split
@@ -9,7 +9,7 @@ shape of the loop.
 The model, the featuriser and the pocket selection are the port's, unchanged — the same code
 `predict.py` scores with.
 
-Outputs follow `harness/training.py` — `model.pt`, `history.csv`, `summary.json`.
+Outputs are `model.pt`, `history.csv`, `summary.json`.
 
 ## Batching, which is the only real work here
 
@@ -140,7 +140,7 @@ def evaluate(model, store, batch_size, device, loss_fn) -> tuple[float, float]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Train the IGN port to the harness contract")
+    p = argparse.ArgumentParser(description="Train the IGN port with an explicit split, resumable from a transferred encoder")
     p.add_argument("--train-graphs", required=True, help="npz from prepare_graphs.py")
     p.add_argument("--val-graphs", default=None)
     p.add_argument("--out", required=True,
@@ -155,7 +155,7 @@ def main() -> int:
     p.add_argument("--patience", type=int, default=AUTHOR_PATIENCE,
                    help="epochs without a better validation loss before stopping")
     p.add_argument("--init-encoder", default=None,
-                   help="encoder .pt from `gnnb encoder split`; makes this a fine-tune")
+                   help="encoder-only .pt (no head tensors); makes this a fine-tune")
     p.add_argument("--freeze-encoder", action="store_true")
     p.add_argument("--init-whole", action="store_true",
                    help="--init-encoder is a whole model.pt from an earlier run, head included: "
